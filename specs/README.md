@@ -18,8 +18,8 @@ Traditional workflow builders require users to understand nodes, connections, an
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | React |
-| Backend | Node.js / TypeScript |
+| Frontend | React + Vite |
+| Backend | Convex |
 | AI/LLM | Claude (Anthropic) |
 | Workflow Engine | n8n |
 
@@ -80,22 +80,24 @@ This specification is a living document that will evolve as the project develops
 | [ai-engine.md](./ai-engine.md) | Planned | LLM processing and prompt design |
 | [api-spec.md](./api-spec.md) | Planned | Backend API specification |
 | [data-model.md](./data-model.md) | Planned | Database schema and data structures |
+| [project-setup.md](./project-setup.md) | Draft | Project structure and initialization |
 
 ## Architecture (High-Level)
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │                 │     │                 │     │                 │
-│   React Chat    │────▶│  Node.js API    │────▶│    n8n Engine   │
-│   Frontend      │     │  + GPT Engine   │     │                 │
+│   React + Vite  │────▶│     Convex      │────▶│   n8n Cloud     │
+│   Frontend      │     │   Functions     │     │                 │
 │                 │◀────│                 │◀────│                 │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
-        │                       │
-        │                       ▼
-        │               ┌─────────────────┐
-        │               │                 │
-        └──────────────▶│  Anthropic API  │
+                               │
+                               ▼
+                        ┌─────────────────┐
+                        │                 │
+                        │  Anthropic API  │
                         │    (Claude)     │
+                        │                 │
                         └─────────────────┘
 ```
 
@@ -110,6 +112,7 @@ This specification is a living document that will evolve as the project develops
 *Rules and conventions that must always be followed during development.*
 
 1. **When the user says something should "always" be done**, add it to this section immediately.
+2. **When updating code or project structure**, consider if any specs need to be updated or if a new spec should be created.
 
 ---
 
