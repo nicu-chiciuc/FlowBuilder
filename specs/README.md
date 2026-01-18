@@ -120,6 +120,7 @@ This specification is a living document that will evolve as the project develops
 2. **When updating code or project structure**, consider if any specs need to be updated or if a new spec should be created.
 3. **When verifying or testing integrations**, update the corresponding spec status from "Draft/Planned" to "Verified" and document any discoveries (e.g., plan requirements, gotchas).
 4. **Before implementing a feature**, write or update the corresponding spec in the `specs/` folder first. Plan before you code.
+5. **Before committing**, run `npm run lint` in the app directory and fix any issues.
 
 ---
 
