@@ -387,6 +387,25 @@ export const listMessages = query({
   },
 });
 
+// Clear all messages in a conversation
+export const clearConversation = mutation({
+  args: { conversationId: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation", (q) =>
+        q.eq("conversationId", args.conversationId)
+      )
+      .collect();
+
+    for (const message of messages) {
+      await ctx.db.delete("messages", message._id);
+    }
+
+    return { deletedCount: messages.length };
+  },
+});
+
 // Internal mutation to save a message
 export const saveMessage = mutation({
   args: {
