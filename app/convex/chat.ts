@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { query, mutation, action } from "./_generated/server";
 import { api } from "./_generated/api";
 
-function buildSystemPrompt(workflows: N8nWorkflow[]) {
+function buildSystemPrompt(workflows: N8nWorkflow[], executions: N8nExecution[]) {
   let workflowSection: string;
 
   if (workflows.length === 0) {
@@ -22,16 +22,37 @@ ${JSON.stringify(workflowJson, null, 2)}
     }).join("\n\n");
   }
 
+  let executionSection: string;
+
+  if (executions.length === 0) {
+    executionSection = "No recent executions.";
+  } else {
+    executionSection = executions.map(e => {
+      const workflowName = workflows.find(w => w.id === e.workflowId)?.name || "Unknown";
+      let summary = `- **${workflowName}** (ID: ${e.id}): ${e.status.toUpperCase()} at ${e.startedAt}`;
+
+      if (e.status === "error" && e.data?.resultData?.error) {
+        summary += `\n  Error: ${e.data.resultData.error.message}`;
+      }
+
+      return summary;
+    }).join("\n");
+  }
+
   return `You are FlowBuilder, an AI assistant that helps users create and manage n8n workflows through natural language.
 
 ## Current Workflows
 ${workflowSection}
 
+## Recent Executions (Logs)
+${executionSection}
+
 ## Capabilities
 1. **List workflows**: When the user asks about their workflows, describe what exists based on the list above.
 2. **Create workflows**: Generate valid n8n workflow JSON when the user describes what they want.
 3. **Modify workflows**: Update existing workflows when the user asks for changes.
-4. **Answer questions**: Help users understand workflows and automation concepts.
+4. **Debug workflows**: Analyze recent execution logs to help users understand failures and fix issues.
+5. **Answer questions**: Help users understand workflows and automation concepts.
 
 ## Creating Workflows
 When creating a NEW workflow:
@@ -100,6 +121,29 @@ interface N8nWorkflow {
   settings?: Record<string, unknown>;
 }
 
+// Type for n8n execution data
+interface N8nExecution {
+  id: string;
+  workflowId: string;
+  finished: boolean;
+  mode: string;
+  status: "success" | "error" | "waiting" | "running";
+  startedAt: string;
+  stoppedAt?: string;
+  data?: {
+    resultData?: {
+      error?: {
+        message: string;
+        stack?: string;
+      };
+      runData?: Record<string, Array<{
+        data: { main: Array<Array<{ json: Record<string, unknown> }>> };
+        error?: { message: string };
+      }>>;
+    };
+  };
+}
+
 // Helper to fetch workflows from n8n (full details)
 async function fetchN8nWorkflows(): Promise<N8nWorkflow[]> {
   const n8nApiUrl = process.env.N8N_API_URL;
@@ -124,6 +168,41 @@ async function fetchN8nWorkflows(): Promise<N8nWorkflow[]> {
       nodes: w.nodes || [],
       connections: w.connections || {},
       settings: w.settings,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// Helper to fetch recent executions from n8n
+async function fetchN8nExecutions(limit = 20): Promise<N8nExecution[]> {
+  const n8nApiUrl = process.env.N8N_API_URL;
+  const n8nApiKey = process.env.N8N_API_KEY;
+
+  if (!n8nApiUrl || !n8nApiKey) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(
+      `${n8nApiUrl}/api/v1/executions?limit=${limit}&includeData=true`,
+      {
+        headers: { "X-N8N-API-KEY": n8nApiKey },
+      }
+    );
+
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return (data.data || []).map((e: N8nExecution) => ({
+      id: e.id,
+      workflowId: e.workflowId,
+      finished: e.finished,
+      mode: e.mode,
+      status: e.status,
+      startedAt: e.startedAt,
+      stoppedAt: e.stoppedAt,
+      data: e.data,
     }));
   } catch {
     return [];
@@ -229,9 +308,12 @@ export const sendMessage = action({
       content: msg.content,
     }));
 
-    // 4. Fetch current workflows for context
-    const workflows = await fetchN8nWorkflows();
-    const systemPrompt = buildSystemPrompt(workflows);
+    // 4. Fetch current workflows and executions for context
+    const [workflows, executions] = await Promise.all([
+      fetchN8nWorkflows(),
+      fetchN8nExecutions(),
+    ]);
+    const systemPrompt = buildSystemPrompt(workflows, executions);
 
     // 5. Call Claude API
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;

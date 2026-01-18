@@ -195,7 +195,8 @@ curl -X POST "https://your-instance.app.n8n.cloud/api/v1/workflows/{id}/activate
 | **Update Workflow** | ✅ Implemented | `PUT /workflows/{id}` - from `n8n-workflow-update` code blocks |
 | **Delete Workflow** | ❌ Not implemented | Planned |
 | **Activate/Deactivate** | ❌ Not implemented | Planned |
-| **Executions** | ❌ Not implemented | Planned |
+| **List Executions** | ✅ Implemented | `GET /executions` - fetches recent executions for debugging context |
+| **Get Execution Details** | ❌ Not implemented | Planned (for detailed node-by-node analysis) |
 
 ## Code Block Conventions
 
@@ -260,6 +261,15 @@ ANTHROPIC_API_KEY=your-anthropic-key
 3. **Validate workflow JSON** before sending to n8n
 4. **Implement rate limiting** on the FlowBuilder API
 5. **Log API calls** for debugging (without sensitive data)
+
+## Backlog
+
+Planned n8n API integrations to implement:
+
+- [ ] **Credentials API** - `GET /credentials`, `POST /credentials` - Let Claude know what integrations are available
+- [ ] **Workflow Activation** - `POST /workflows/{id}/activate`, `POST /workflows/{id}/deactivate` - Enable/disable workflows via chat
+- [ ] **Workflow Deletion** - `DELETE /workflows/{id}` - Remove workflows via chat
+- [ ] **Get Execution Details** - `GET /executions/{id}` - Detailed node-by-node analysis for debugging
 
 ## References
 
