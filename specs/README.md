@@ -111,7 +111,7 @@ This specification is a living document that will evolve as the project develops
 
 *Rules and conventions that must always be followed during development.*
 
-1. **When the user says something should "always" be done**, add it to this section immediately.
+1. **When the user says something should "always" be done**, add it to this section immediately. Also add guidelines that seem important even if not explicitly marked as "always" (ask if unsure).
 2. **When updating code or project structure**, consider if any specs need to be updated or if a new spec should be created.
 
 ---
