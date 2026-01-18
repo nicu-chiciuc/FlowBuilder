@@ -160,8 +160,8 @@ curl -X POST "https://your-instance.app.n8n.cloud/api/v1/workflows/{id}/activate
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │                 │     │                 │     │                 │
-│  React Chat UI  │────▶│  Node.js API    │────▶│  n8n Cloud/     │
-│                 │     │                 │     │  Self-Hosted    │
+│  React Chat UI  │────▶│  Convex         │────▶│  n8n Cloud/     │
+│                 │     │  Functions      │     │  Self-Hosted    │
 │                 │◀────│                 │◀────│                 │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
                                │
@@ -180,11 +180,57 @@ curl -X POST "https://your-instance.app.n8n.cloud/api/v1/workflows/{id}/activate
 ### Flow
 
 1. User describes a workflow in natural language
-2. FlowBuilder sends prompt to Claude API
+2. FlowBuilder sends prompt to Claude API (with full existing workflow context)
 3. Claude generates n8n workflow JSON
 4. FlowBuilder validates the JSON structure
 5. FlowBuilder calls n8n API to create/update workflow
 6. Response is sent back to user
+
+## Implementation Status
+
+| Operation | Status | Details |
+|-----------|--------|---------|
+| **List Workflows** | ✅ Implemented | `GET /workflows` - fetches full workflow details for Claude context |
+| **Create Workflow** | ✅ Implemented | `POST /workflows` - from `n8n-workflow` code blocks |
+| **Update Workflow** | ✅ Implemented | `PUT /workflows/{id}` - from `n8n-workflow-update` code blocks |
+| **Delete Workflow** | ❌ Not implemented | Planned |
+| **Activate/Deactivate** | ❌ Not implemented | Planned |
+| **Executions** | ❌ Not implemented | Planned |
+
+## Code Block Conventions
+
+Claude uses special code block markers to indicate workflow operations:
+
+### Creating a New Workflow
+
+Use the `n8n-workflow` language tag:
+
+~~~markdown
+```n8n-workflow
+{
+  "name": "My New Workflow",
+  "nodes": [...],
+  "connections": {...}
+}
+```
+~~~
+
+### Modifying an Existing Workflow
+
+Use the `n8n-workflow-update` language tag with `_updateId` field:
+
+~~~markdown
+```n8n-workflow-update
+{
+  "_updateId": "workflow-id-here",
+  "name": "Updated Workflow",
+  "nodes": [...],
+  "connections": {...}
+}
+```
+~~~
+
+**Important**: The `_updateId` field is stripped before sending to n8n API. The entire workflow definition must be provided (not just changed parts) as it replaces the existing workflow.
 
 ## Error Handling
 
@@ -223,5 +269,5 @@ ANTHROPIC_API_KEY=your-anthropic-key
 
 ---
 
-*Status: Verified (API tested and working)*
+*Status: Verified (API tested and working, create/update implemented)*
 *Last updated: 2026-01-19*

@@ -62,21 +62,25 @@ A simple conversational interface for creating and managing n8n workflows throug
 - `sendMessage(conversationId, content)` - Main orchestration:
   1. Save user message to DB
   2. Fetch conversation history for context
-  3. Fetch current workflows from n8n API (for context)
-  4. Build dynamic system prompt with workflow list
+  3. Fetch current workflows from n8n API (full workflow definitions for context)
+  4. Build dynamic system prompt with complete workflow JSON
   5. Call Claude API with system prompt + history
-  6. Parse response for workflow JSON (look for ```n8n-workflow blocks)
-  7. If workflow found, call n8n API to create it
+  6. Parse response for workflow JSON:
+     - `n8n-workflow-update` blocks → update existing workflow (PUT)
+     - `n8n-workflow` blocks → create new workflow (POST)
+  7. If workflow found, call appropriate n8n API endpoint
   8. Save assistant response (with workflowId if applicable)
   9. Return result
 
 ## Claude System Prompt
 
 The system prompt is built dynamically and includes:
-1. List of current workflows (fetched from n8n on each request)
-2. Capabilities: list workflows, create workflows, answer questions
+1. **Full workflow definitions** (fetched from n8n on each request) - Claude sees complete JSON for all workflows
+2. Capabilities: list workflows, create workflows, **modify workflows**, answer questions
 3. Instructions for generating n8n workflow JSON
-4. Example response format with ```n8n-workflow code blocks
+4. Code block conventions:
+   - `n8n-workflow` - for creating new workflows
+   - `n8n-workflow-update` - for modifying existing workflows (requires `_updateId` field)
 
 ## UI Components
 
@@ -109,7 +113,9 @@ ANTHROPIC_API_KEY=your-key
 - [ ] Embed n8n iframe for reactive updates
 - [ ] Multiple conversations with sidebar
 - [x] List existing workflows
-- [ ] Workflow modification (not just creation)
+- [x] Workflow modification (create and update)
+- [ ] Workflow deletion
+- [ ] Workflow activate/deactivate
 - [ ] Execution monitoring
 - [ ] User authentication
 

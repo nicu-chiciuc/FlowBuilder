@@ -2,23 +2,39 @@ import { v } from "convex/values";
 import { query, mutation, action } from "./_generated/server";
 import { api } from "./_generated/api";
 
-function buildSystemPrompt(workflows: Array<{ id: string; name: string; active: boolean }>) {
-  const workflowList = workflows.length > 0
-    ? workflows.map(w => `- "${w.name}" (ID: ${w.id}, ${w.active ? "active" : "inactive"})`).join("\n")
-    : "No workflows exist yet.";
+function buildSystemPrompt(workflows: N8nWorkflow[]) {
+  let workflowSection: string;
+
+  if (workflows.length === 0) {
+    workflowSection = "No workflows exist yet.";
+  } else {
+    workflowSection = workflows.map(w => {
+      const workflowJson = {
+        name: w.name,
+        nodes: w.nodes,
+        connections: w.connections,
+        settings: w.settings,
+      };
+      return `### "${w.name}" (ID: ${w.id}, ${w.active ? "active" : "inactive"})
+\`\`\`json
+${JSON.stringify(workflowJson, null, 2)}
+\`\`\``;
+    }).join("\n\n");
+  }
 
   return `You are FlowBuilder, an AI assistant that helps users create and manage n8n workflows through natural language.
 
 ## Current Workflows
-${workflowList}
+${workflowSection}
 
 ## Capabilities
 1. **List workflows**: When the user asks about their workflows, describe what exists based on the list above.
 2. **Create workflows**: Generate valid n8n workflow JSON when the user describes what they want.
-3. **Answer questions**: Help users understand workflows and automation concepts.
+3. **Modify workflows**: Update existing workflows when the user asks for changes.
+4. **Answer questions**: Help users understand workflows and automation concepts.
 
 ## Creating Workflows
-When creating a workflow:
+When creating a NEW workflow:
 1. Generate valid n8n workflow JSON
 2. Wrap the JSON in a code block with language "n8n-workflow"
 3. Explain what the workflow does
@@ -36,6 +52,30 @@ Example:
 
 This workflow will [explanation]."
 
+## Modifying Workflows
+When MODIFYING an existing workflow:
+1. The user must reference an existing workflow (by name or ID from the list above)
+2. Generate the COMPLETE updated workflow JSON (not just the changes)
+3. Wrap the JSON in a code block with language "n8n-workflow-update"
+4. Include the workflow ID in the JSON as "_updateId" field
+5. Explain what was changed
+
+Example:
+"I'll update the 'Daily Report' workflow to add email notification.
+
+\`\`\`n8n-workflow-update
+{
+  "_updateId": "abc123",
+  "name": "Daily Report",
+  "nodes": [...],
+  "connections": {...}
+}
+\`\`\`
+
+I've added an email node that will [explanation of changes]."
+
+IMPORTANT: When modifying, you must provide the COMPLETE workflow definition, not just the parts that changed. The entire workflow will be replaced with what you provide.
+
 ## n8n Workflow Structure
 - Every workflow needs at least one trigger node (e.g., manualTrigger, scheduleTrigger, webhook)
 - Nodes have: name, type, position (array of [x, y]), parameters
@@ -45,8 +85,23 @@ This workflow will [explanation]."
 If the user asks questions, wants clarification, or is just chatting, respond conversationally without generating a workflow.`;
 }
 
-// Helper to fetch workflows from n8n
-async function fetchN8nWorkflows(): Promise<Array<{ id: string; name: string; active: boolean }>> {
+// Type for n8n workflow data
+interface N8nWorkflow {
+  id: string;
+  name: string;
+  active: boolean;
+  nodes: Array<{
+    name: string;
+    type: string;
+    position: [number, number];
+    parameters: Record<string, unknown>;
+  }>;
+  connections: Record<string, unknown>;
+  settings?: Record<string, unknown>;
+}
+
+// Helper to fetch workflows from n8n (full details)
+async function fetchN8nWorkflows(): Promise<N8nWorkflow[]> {
   const n8nApiUrl = process.env.N8N_API_URL;
   const n8nApiKey = process.env.N8N_API_KEY;
 
@@ -62,13 +117,50 @@ async function fetchN8nWorkflows(): Promise<Array<{ id: string; name: string; ac
     if (!response.ok) return [];
 
     const data = await response.json();
-    return (data.data || []).map((w: { id: string; name: string; active: boolean }) => ({
+    return (data.data || []).map((w: N8nWorkflow) => ({
       id: w.id,
       name: w.name,
       active: w.active,
+      nodes: w.nodes || [],
+      connections: w.connections || {},
+      settings: w.settings,
     }));
   } catch {
     return [];
+  }
+}
+
+// Helper to update a workflow in n8n
+async function updateWorkflow(
+  workflowId: string,
+  workflowJson: Record<string, unknown>
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  const n8nApiUrl = process.env.N8N_API_URL;
+  const n8nApiKey = process.env.N8N_API_KEY;
+
+  if (!n8nApiUrl || !n8nApiKey) {
+    return { success: false, error: "n8n API not configured" };
+  }
+
+  try {
+    const response = await fetch(`${n8nApiUrl}/api/v1/workflows/${workflowId}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-N8N-API-KEY": n8nApiKey,
+      },
+      body: JSON.stringify(workflowJson),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return { success: true, id: data.id };
+    } else {
+      const errorText = await response.text();
+      return { success: false, error: errorText };
+    }
+  } catch (e) {
+    return { success: false, error: String(e) };
   }
 }
 
@@ -174,17 +266,47 @@ export const sendMessage = action({
     const assistantContent =
       claudeData.content[0]?.text || "Sorry, I could not generate a response.";
 
-    // 6. Check for workflow JSON in response
+    // 6. Check for workflow JSON in response (create or update)
     let workflowId: string | undefined;
     let workflowName: string | undefined;
 
-    const workflowMatch = assistantContent.match(
+    // Check for workflow update first (more specific pattern)
+    const updateMatch = assistantContent.match(
+      /```n8n-workflow-update\s*([\s\S]*?)```/
+    );
+
+    // Check for new workflow creation
+    const createMatch = assistantContent.match(
       /```n8n-workflow\s*([\s\S]*?)```/
     );
 
-    if (workflowMatch) {
+    if (updateMatch) {
+      // Handle workflow update
       try {
-        const workflowJson = JSON.parse(workflowMatch[1].trim());
+        const workflowJson = JSON.parse(updateMatch[1].trim());
+        const updateId = workflowJson._updateId;
+        workflowName = workflowJson.name || "Untitled Workflow";
+
+        if (!updateId) {
+          console.error("Workflow update missing _updateId field");
+        } else {
+          // Remove the _updateId field before sending to n8n
+          delete workflowJson._updateId;
+
+          const result = await updateWorkflow(updateId, workflowJson);
+          if (result.success) {
+            workflowId = result.id;
+          } else {
+            console.error("n8n API error:", result.error);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to parse or update workflow:", e);
+      }
+    } else if (createMatch) {
+      // Handle new workflow creation
+      try {
+        const workflowJson = JSON.parse(createMatch[1].trim());
         workflowName = workflowJson.name || "Untitled Workflow";
 
         // 7. Create workflow in n8n
