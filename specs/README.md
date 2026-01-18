@@ -76,7 +76,7 @@ This specification is a living document that will evolve as the project develops
 |----------|--------|-------------|
 | [README.md](./README.md) | Current | Main specification overview |
 | [chat-interface.md](./chat-interface.md) | Planned | Chat UI and interaction patterns |
-| [n8n-integration.md](./n8n-integration.md) | Planned | n8n API integration details |
+| [n8n-integration.md](./n8n-integration.md) | Draft | n8n API integration details |
 | [ai-engine.md](./ai-engine.md) | Planned | LLM processing and prompt design |
 | [api-spec.md](./api-spec.md) | Planned | Backend API specification |
 | [data-model.md](./data-model.md) | Planned | Database schema and data structures |
@@ -102,6 +102,14 @@ This specification is a living document that will evolve as the project develops
 ## Getting Started
 
 *Coming soon - development is in planning phase*
+
+---
+
+## IMPORTANT Guidelines
+
+*Rules and conventions that must always be followed during development.*
+
+1. **When the user says something should "always" be done**, add it to this section immediately.
 
 ---
 
