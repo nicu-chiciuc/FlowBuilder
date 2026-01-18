@@ -80,7 +80,7 @@ This specification is a living document that will evolve as the project develops
 | Document | Status | Description |
 |----------|--------|-------------|
 | [README.md](./README.md) | Current | Main specification overview |
-| [chat-interface.md](./chat-interface.md) | Planned | Chat UI and interaction patterns |
+| [chat-interface.md](./chat-interface.md) | In Progress | Chat UI and interaction patterns |
 | [n8n-integration.md](./n8n-integration.md) | Verified | n8n API integration details |
 | [ai-engine.md](./ai-engine.md) | Planned | LLM processing and prompt design |
 | [api-spec.md](./api-spec.md) | Planned | Backend API specification |
@@ -119,6 +119,7 @@ This specification is a living document that will evolve as the project develops
 1. **When the user says something should "always" be done**, add it to this section immediately. Also add guidelines that seem important even if not explicitly marked as "always" (ask if unsure).
 2. **When updating code or project structure**, consider if any specs need to be updated or if a new spec should be created.
 3. **When verifying or testing integrations**, update the corresponding spec status from "Draft/Planned" to "Verified" and document any discoveries (e.g., plan requirements, gotchas).
+4. **Before implementing a feature**, write or update the corresponding spec in the `specs/` folder first. Plan before you code.
 
 ---
 

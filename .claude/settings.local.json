@@ -3,7 +3,12 @@
     "allow": [
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(npm create:*)",
+      "Bash(source .env)",
+      "Bash(curl:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run lint)"
     ]
   }
 }
