@@ -68,6 +68,11 @@ FlowBuilder supports flexible deployment options:
 
 **Current Stage**: Planning & Design
 
+**Completed Setup:**
+- n8n API - configured and verified
+- Anthropic API (Claude) - configured and verified
+- Convex backend - initialized
+
 This specification is a living document that will evolve as the project develops.
 
 ## Spec Documents
@@ -76,7 +81,7 @@ This specification is a living document that will evolve as the project develops
 |----------|--------|-------------|
 | [README.md](./README.md) | Current | Main specification overview |
 | [chat-interface.md](./chat-interface.md) | Planned | Chat UI and interaction patterns |
-| [n8n-integration.md](./n8n-integration.md) | Draft | n8n API integration details |
+| [n8n-integration.md](./n8n-integration.md) | Verified | n8n API integration details |
 | [ai-engine.md](./ai-engine.md) | Planned | LLM processing and prompt design |
 | [api-spec.md](./api-spec.md) | Planned | Backend API specification |
 | [data-model.md](./data-model.md) | Planned | Database schema and data structures |
@@ -113,7 +118,8 @@ This specification is a living document that will evolve as the project develops
 
 1. **When the user says something should "always" be done**, add it to this section immediately. Also add guidelines that seem important even if not explicitly marked as "always" (ask if unsure).
 2. **When updating code or project structure**, consider if any specs need to be updated or if a new spec should be created.
+3. **When verifying or testing integrations**, update the corresponding spec status from "Draft/Planned" to "Verified" and document any discoveries (e.g., plan requirements, gotchas).
 
 ---
 
-*Last updated: 2026-01-18*
+*Last updated: 2026-01-19*

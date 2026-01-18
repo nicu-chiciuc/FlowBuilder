@@ -29,7 +29,7 @@ X-N8N-API-KEY: your-api-key-here
 
 ### Important Notes
 
-- n8n Cloud API access requires a **paid tier**
+- n8n Cloud API access requires a **Starter plan or higher** (API option not visible on free tier)
 - API playground/Swagger UI is only available on self-hosted instances
 - Rate limiting applies - implement exponential backoff for retries
 
@@ -223,5 +223,5 @@ ANTHROPIC_API_KEY=your-anthropic-key
 
 ---
 
-*Status: Draft*
-*Last updated: 2026-01-18*
+*Status: Verified (API tested and working)*
+*Last updated: 2026-01-19*
