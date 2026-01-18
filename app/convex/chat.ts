@@ -2,7 +2,11 @@ import { v } from "convex/values";
 import { query, mutation, action } from "./_generated/server";
 import { api } from "./_generated/api";
 
-function buildSystemPrompt(workflows: N8nWorkflow[], executions: N8nExecution[]) {
+function buildSystemPrompt(
+  workflows: N8nWorkflow[],
+  executions: N8nExecution[],
+  credentials: N8nCredential[]
+) {
   let workflowSection: string;
 
   if (workflows.length === 0) {
@@ -39,6 +43,14 @@ ${JSON.stringify(workflowJson, null, 2)}
     }).join("\n");
   }
 
+  let credentialSection: string;
+
+  if (credentials.length === 0) {
+    credentialSection = "No credentials configured. The user will need to set up credentials in n8n before using integrations that require authentication.";
+  } else {
+    credentialSection = credentials.map(c => `- **${c.name}** (type: ${c.type})`).join("\n");
+  }
+
   return `You are FlowBuilder, an AI assistant that helps users create and manage n8n workflows through natural language.
 
 ## Current Workflows
@@ -47,12 +59,17 @@ ${workflowSection}
 ## Recent Executions (Logs)
 ${executionSection}
 
+## Available Credentials
+${credentialSection}
+
 ## Capabilities
 1. **List workflows**: When the user asks about their workflows, describe what exists based on the list above.
 2. **Create workflows**: Generate valid n8n workflow JSON when the user describes what they want.
 3. **Modify workflows**: Update existing workflows when the user asks for changes.
-4. **Debug workflows**: Analyze recent execution logs to help users understand failures and fix issues.
-5. **Answer questions**: Help users understand workflows and automation concepts.
+4. **Activate/Deactivate workflows**: Turn workflows on or off.
+5. **Delete workflows**: Remove workflows when requested.
+6. **Debug workflows**: Analyze recent execution logs to help users understand failures and fix issues.
+7. **Answer questions**: Help users understand workflows and automation concepts.
 
 ## Creating Workflows
 When creating a NEW workflow:
@@ -96,6 +113,20 @@ Example:
 I've added an email node that will [explanation of changes]."
 
 IMPORTANT: When modifying, you must provide the COMPLETE workflow definition, not just the parts that changed. The entire workflow will be replaced with what you provide.
+
+## Workflow Actions (Activate/Deactivate/Delete)
+When performing actions on workflows, use the "n8n-action" code block:
+
+\`\`\`n8n-action
+{"action": "activate", "workflowId": "workflow-id-here"}
+\`\`\`
+
+Available actions:
+- **activate**: Turn on a workflow so it runs on its trigger schedule
+- **deactivate**: Turn off a workflow to stop it from running
+- **delete**: Permanently remove a workflow (ask for confirmation first!)
+
+Always explain what you're doing and confirm with the user before deleting workflows.
 
 ## n8n Workflow Structure
 - Every workflow needs at least one trigger node (e.g., manualTrigger, scheduleTrigger, webhook)
@@ -209,11 +240,12 @@ async function fetchN8nExecutions(limit = 20): Promise<N8nExecution[]> {
   }
 }
 
-// Helper to update a workflow in n8n
-async function updateWorkflow(
-  workflowId: string,
-  workflowJson: Record<string, unknown>
-): Promise<{ success: boolean; id?: string; error?: string }> {
+// Generic n8n API call helper
+async function n8nApiCall(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  endpoint: string,
+  body?: Record<string, unknown>
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
   const n8nApiUrl = process.env.N8N_API_URL;
   const n8nApiKey = process.env.N8N_API_KEY;
 
@@ -222,24 +254,110 @@ async function updateWorkflow(
   }
 
   try {
-    const response = await fetch(`${n8nApiUrl}/api/v1/workflows/${workflowId}`, {
-      method: "PUT",
+    const response = await fetch(`${n8nApiUrl}/api/v1${endpoint}`, {
+      method,
       headers: {
         "Content-Type": "application/json",
         "X-N8N-API-KEY": n8nApiKey,
       },
-      body: JSON.stringify(workflowJson),
+      ...(body && { body: JSON.stringify(body) }),
     });
 
     if (response.ok) {
+      // DELETE returns 204 with no body
+      if (response.status === 204) {
+        return { success: true };
+      }
       const data = await response.json();
-      return { success: true, id: data.id };
+      return { success: true, data };
     } else {
       const errorText = await response.text();
       return { success: false, error: errorText };
     }
   } catch (e) {
     return { success: false, error: String(e) };
+  }
+}
+
+// Type for n8n credential metadata
+interface N8nCredential {
+  id: string;
+  name: string;
+  type: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Helper to fetch credentials from n8n
+async function fetchN8nCredentials(): Promise<N8nCredential[]> {
+  const result = await n8nApiCall("GET", "/credentials");
+  if (!result.success || !result.data) return [];
+
+  const data = result.data as { data?: N8nCredential[] };
+  return (data.data || []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    type: c.type,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+  }));
+}
+
+// Helper to update a workflow in n8n
+async function updateWorkflow(
+  workflowId: string,
+  workflowJson: Record<string, unknown>
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  const result = await n8nApiCall("PUT", `/workflows/${workflowId}`, workflowJson);
+  if (result.success && result.data) {
+    const data = result.data as { id: string };
+    return { success: true, id: data.id };
+  }
+  return { success: false, error: result.error };
+}
+
+// Type for n8n action parameters
+type N8nAction =
+  | { action: "activate"; workflowId: string }
+  | { action: "deactivate"; workflowId: string }
+  | { action: "delete"; workflowId: string };
+
+// Execute an n8n action from AI response
+async function executeN8nAction(
+  actionParams: N8nAction
+): Promise<{ success: boolean; message: string; data?: unknown }> {
+  const { action, workflowId } = actionParams;
+
+  switch (action) {
+    case "activate": {
+      const result = await n8nApiCall("POST", `/workflows/${workflowId}/activate`);
+      return {
+        success: result.success,
+        message: result.success
+          ? `Workflow ${workflowId} activated`
+          : `Failed to activate: ${result.error}`,
+        data: result.data,
+      };
+    }
+    case "deactivate": {
+      const result = await n8nApiCall("POST", `/workflows/${workflowId}/deactivate`);
+      return {
+        success: result.success,
+        message: result.success
+          ? `Workflow ${workflowId} deactivated`
+          : `Failed to deactivate: ${result.error}`,
+        data: result.data,
+      };
+    }
+    case "delete": {
+      const result = await n8nApiCall("DELETE", `/workflows/${workflowId}`);
+      return {
+        success: result.success,
+        message: result.success
+          ? `Workflow ${workflowId} deleted`
+          : `Failed to delete: ${result.error}`,
+      };
+    }
   }
 }
 
@@ -308,12 +426,13 @@ export const sendMessage = action({
       content: msg.content,
     }));
 
-    // 4. Fetch current workflows and executions for context
-    const [workflows, executions] = await Promise.all([
+    // 4. Fetch current workflows, executions, and credentials for context
+    const [workflows, executions, credentials] = await Promise.all([
       fetchN8nWorkflows(),
       fetchN8nExecutions(),
+      fetchN8nCredentials(),
     ]);
-    const systemPrompt = buildSystemPrompt(workflows, executions);
+    const systemPrompt = buildSystemPrompt(workflows, executions, credentials);
 
     // 5. Call Claude API
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
@@ -417,6 +536,37 @@ export const sendMessage = action({
         }
       } catch (e) {
         console.error("Failed to parse or create workflow:", e);
+      }
+    }
+
+    // 7. Check for action commands (activate/deactivate/delete)
+    const actionMatch = assistantContent.match(
+      /```n8n-action\s*([\s\S]*?)```/
+    );
+
+    if (actionMatch) {
+      try {
+        const actionJson = JSON.parse(actionMatch[1].trim()) as {
+          action?: string;
+          workflowId?: string;
+        };
+        const { action, workflowId } = actionJson;
+
+        if (
+          action &&
+          workflowId &&
+          (action === "activate" || action === "deactivate" || action === "delete")
+        ) {
+          const actionResult = await executeN8nAction({ action, workflowId });
+
+          if (actionResult.success) {
+            console.log(`Action ${action} succeeded:`, actionResult.message);
+          } else {
+            console.error(`Action ${action} failed:`, actionResult.message);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to parse or execute action:", e);
       }
     }
 

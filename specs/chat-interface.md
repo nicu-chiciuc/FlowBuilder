@@ -62,25 +62,30 @@ A simple conversational interface for creating and managing n8n workflows throug
 - `sendMessage(conversationId, content)` - Main orchestration:
   1. Save user message to DB
   2. Fetch conversation history for context
-  3. Fetch current workflows from n8n API (full workflow definitions for context)
-  4. Build dynamic system prompt with complete workflow JSON
+  3. Fetch current workflows, executions, and credentials from n8n API
+  4. Build dynamic system prompt with complete workflow JSON + credentials
   5. Call Claude API with system prompt + history
   6. Parse response for workflow JSON:
      - `n8n-workflow-update` blocks → update existing workflow (PUT)
      - `n8n-workflow` blocks → create new workflow (POST)
-  7. If workflow found, call appropriate n8n API endpoint
-  8. Save assistant response (with workflowId if applicable)
-  9. Return result
+  7. Parse response for action commands:
+     - `n8n-action` blocks → execute action (activate/deactivate/delete)
+  8. If workflow or action found, call appropriate n8n API endpoint
+  9. Save assistant response (with workflowId if applicable)
+  10. Return result
 
 ## Claude System Prompt
 
 The system prompt is built dynamically and includes:
 1. **Full workflow definitions** (fetched from n8n on each request) - Claude sees complete JSON for all workflows
-2. Capabilities: list workflows, create workflows, **modify workflows**, answer questions
-3. Instructions for generating n8n workflow JSON
-4. Code block conventions:
+2. **Recent executions** - for debugging context
+3. **Available credentials** - so Claude knows what integrations are configured
+4. Capabilities: list workflows, create workflows, modify workflows, activate/deactivate, delete, debug, answer questions
+5. Instructions for generating n8n workflow JSON
+6. Code block conventions:
    - `n8n-workflow` - for creating new workflows
    - `n8n-workflow-update` - for modifying existing workflows (requires `_updateId` field)
+   - `n8n-action` - for workflow actions (activate/deactivate/delete)
 
 ## UI Components
 
@@ -114,9 +119,10 @@ ANTHROPIC_API_KEY=your-key
 - [ ] Multiple conversations with sidebar
 - [x] List existing workflows
 - [x] Workflow modification (create and update)
-- [ ] Workflow deletion
-- [ ] Workflow activate/deactivate
-- [ ] Execution monitoring
+- [x] Workflow deletion
+- [x] Workflow activate/deactivate
+- [x] Credentials context (Claude knows available integrations)
+- [ ] Execution monitoring UI
 - [ ] User authentication
 
 ---

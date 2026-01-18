@@ -155,6 +155,75 @@ curl -X POST "https://your-instance.app.n8n.cloud/api/v1/workflows/{id}/activate
   -H "X-N8N-API-KEY: your-api-key"
 ```
 
+### List Credentials
+
+```bash
+curl -X GET "https://your-instance.app.n8n.cloud/api/v1/credentials" \
+  -H "X-N8N-API-KEY: your-api-key"
+```
+
+**Response:**
+
+```json
+{
+  "data": [
+    {
+      "id": "1",
+      "name": "My Slack Account",
+      "type": "slackApi",
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "updatedAt": "2024-01-15T10:30:00.000Z"
+    },
+    {
+      "id": "2",
+      "name": "Google Sheets",
+      "type": "googleSheetsOAuth2Api",
+      "createdAt": "2024-01-16T14:20:00.000Z",
+      "updatedAt": "2024-01-16T14:20:00.000Z"
+    }
+  ]
+}
+```
+
+**Note:** The API does not return credential secrets for security reasons. Only metadata (id, name, type, timestamps) is returned.
+
+### Create Credentials
+
+```bash
+curl -X POST "https://your-instance.app.n8n.cloud/api/v1/credentials" \
+  -H "X-N8N-API-KEY: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My API Token",
+    "type": "httpHeaderAuth",
+    "data": {
+      "name": "Authorization",
+      "value": "Bearer your-token-here"
+    }
+  }'
+```
+
+**Common Credential Types:**
+
+| Type | Description |
+|------|-------------|
+| `slackApi` | Slack Bot/User Token |
+| `slackOAuth2Api` | Slack OAuth2 |
+| `googleSheetsOAuth2Api` | Google Sheets OAuth2 |
+| `gmailOAuth2` | Gmail OAuth2 |
+| `notionApi` | Notion API Key |
+| `githubApi` | GitHub Personal Access Token |
+| `openAiApi` | OpenAI API Key |
+| `httpHeaderAuth` | Generic HTTP Header Auth |
+| `httpBasicAuth` | HTTP Basic Auth |
+
+### Delete Credentials
+
+```bash
+curl -X DELETE "https://your-instance.app.n8n.cloud/api/v1/credentials/{id}" \
+  -H "X-N8N-API-KEY: your-api-key"
+```
+
 ## FlowBuilder Integration Architecture
 
 ```
@@ -193,8 +262,9 @@ curl -X POST "https://your-instance.app.n8n.cloud/api/v1/workflows/{id}/activate
 | **List Workflows** | ✅ Implemented | `GET /workflows` - fetches full workflow details for Claude context |
 | **Create Workflow** | ✅ Implemented | `POST /workflows` - from `n8n-workflow` code blocks |
 | **Update Workflow** | ✅ Implemented | `PUT /workflows/{id}` - from `n8n-workflow-update` code blocks |
-| **Delete Workflow** | ❌ Not implemented | Planned |
-| **Activate/Deactivate** | ❌ Not implemented | Planned |
+| **Delete Workflow** | ✅ Implemented | `DELETE /workflows/{id}` - from `n8n-action` code blocks |
+| **Activate/Deactivate** | ✅ Implemented | `POST /workflows/{id}/activate` and `/deactivate` - from `n8n-action` code blocks |
+| **List Credentials** | ✅ Implemented | `GET /credentials` - fetches credential metadata for Claude context |
 | **List Executions** | ✅ Implemented | `GET /executions` - fetches recent executions for debugging context |
 | **Get Execution Details** | ❌ Not implemented | Planned (for detailed node-by-node analysis) |
 
@@ -233,6 +303,21 @@ Use the `n8n-workflow-update` language tag with `_updateId` field:
 
 **Important**: The `_updateId` field is stripped before sending to n8n API. The entire workflow definition must be provided (not just changed parts) as it replaces the existing workflow.
 
+### Workflow Actions (Activate/Deactivate/Delete)
+
+Use the `n8n-action` language tag:
+
+~~~markdown
+```n8n-action
+{"action": "activate", "workflowId": "workflow-id-here"}
+```
+~~~
+
+Available actions:
+- `activate` - Turn on a workflow
+- `deactivate` - Turn off a workflow
+- `delete` - Permanently remove a workflow
+
 ## Error Handling
 
 | Status Code | Meaning | Action |
@@ -266,10 +351,11 @@ ANTHROPIC_API_KEY=your-anthropic-key
 
 Planned n8n API integrations to implement:
 
-- [ ] **Credentials API** - `GET /credentials`, `POST /credentials` - Let Claude know what integrations are available
-- [ ] **Workflow Activation** - `POST /workflows/{id}/activate`, `POST /workflows/{id}/deactivate` - Enable/disable workflows via chat
-- [ ] **Workflow Deletion** - `DELETE /workflows/{id}` - Remove workflows via chat
+- [x] **Credentials API** - `GET /credentials` - Claude sees available integrations in context
+- [x] **Workflow Activation** - `POST /workflows/{id}/activate`, `POST /workflows/{id}/deactivate` - Enable/disable workflows via chat
+- [x] **Workflow Deletion** - `DELETE /workflows/{id}` - Remove workflows via chat
 - [ ] **Get Execution Details** - `GET /executions/{id}` - Detailed node-by-node analysis for debugging
+- [ ] **Create Credentials** - `POST /credentials` - Create credentials via chat (requires secure handling)
 
 ## References
 
@@ -279,5 +365,5 @@ Planned n8n API integrations to implement:
 
 ---
 
-*Status: Verified (API tested and working, create/update implemented)*
+*Status: Verified (API tested and working, full CRUD + activate/deactivate implemented)*
 *Last updated: 2026-01-19*
