@@ -16,5 +16,7 @@ export default defineSchema({
     content: v.string(),
     workflowId: v.optional(v.string()),
     workflowName: v.optional(v.string()),
+    isStreaming: v.optional(v.boolean()),
+    streamingError: v.optional(v.string()),
   }).index("by_conversation", ["conversationId"]),
 });

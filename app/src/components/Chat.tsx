@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
@@ -7,15 +7,21 @@ import { MessageInput } from "./MessageInput";
 
 export function Chat() {
   const [conversationId, setConversationId] = useState<Id<"conversations"> | null>(null);
-  const [isSending, setIsSending] = useState(false);
+  const [streamingMessageId, setStreamingMessageId] = useState<Id<"messages"> | null>(null);
 
   const getOrCreateConversation = useMutation(api.chat.getOrCreateConversation);
   const sendMessage = useAction(api.chat.sendMessage);
+  const stopStreaming = useMutation(api.chat.stopStreaming);
   const clearConversation = useMutation(api.chat.clearConversation);
   const messages = useQuery(
     api.chat.listMessages,
     conversationId ? { conversationId } : "skip"
   );
+
+  // Check if any message is currently streaming
+  const isStreaming = useMemo(() => {
+    return messages?.some((m) => m.isStreaming) ?? false;
+  }, [messages]);
 
   useEffect(() => {
     void getOrCreateConversation().then(setConversationId);
@@ -24,14 +30,27 @@ export function Chat() {
   const handleSend = (content: string) => {
     if (!conversationId) return;
 
-    setIsSending(true);
     sendMessage({ conversationId, content })
+      .then((result) => {
+        setStreamingMessageId(result.messageId);
+      })
       .catch((error) => {
         console.error("Failed to send message:", error);
-      })
-      .finally(() => {
-        setIsSending(false);
       });
+  };
+
+  const handleStop = () => {
+    // Find the streaming message from messages list
+    const streamingMsg = messages?.find((m) => m.isStreaming);
+    if (streamingMsg) {
+      stopStreaming({ messageId: streamingMsg._id })
+        .then(() => {
+          setStreamingMessageId(null);
+        })
+        .catch((error) => {
+          console.error("Failed to stop streaming:", error);
+        });
+    }
   };
 
   const handleClearChat = () => {
@@ -67,7 +86,12 @@ export function Chat() {
         </button>
       </div>
       <MessageList messages={messages ?? []} />
-      <MessageInput onSend={handleSend} disabled={isSending} />
+      <MessageInput 
+        onSend={handleSend} 
+        onStop={handleStop}
+        disabled={isStreaming} 
+        isStreaming={isStreaming}
+      />
     </div>
   );
 }

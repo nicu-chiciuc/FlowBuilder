@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { query, mutation, action } from "./_generated/server";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 
 function buildSystemPrompt(
   workflows: N8nWorkflow[],
@@ -414,19 +415,218 @@ export const saveMessage = mutation({
     content: v.string(),
     workflowId: v.optional(v.string()),
     workflowName: v.optional(v.string()),
+    isStreaming: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("messages", args);
   },
 });
 
-// Main action: send a message and get AI response
+// Update a streaming message with new content
+export const updateStreamingMessage = mutation({
+  args: {
+    messageId: v.id("messages"),
+    content: v.string(),
+    isStreaming: v.optional(v.boolean()),
+    streamingError: v.optional(v.string()),
+    workflowId: v.optional(v.string()),
+    workflowName: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { messageId, content, isStreaming, streamingError, workflowId, workflowName } = args;
+    const updates: {
+      content: string;
+      isStreaming?: boolean;
+      streamingError?: string;
+      workflowId?: string;
+      workflowName?: string;
+    } = { content };
+    if (isStreaming !== undefined) updates.isStreaming = isStreaming;
+    if (streamingError !== undefined) updates.streamingError = streamingError;
+    if (workflowId !== undefined) updates.workflowId = workflowId;
+    if (workflowName !== undefined) updates.workflowName = workflowName;
+    await ctx.db.patch("messages", messageId, updates);
+    return null;
+  },
+});
+
+// Stop a streaming message
+export const stopStreaming = mutation({
+  args: {
+    messageId: v.id("messages"),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch("messages", args.messageId, { isStreaming: false });
+    return null;
+  },
+});
+
+// Helper to parse SSE events from Claude streaming response
+function parseSSEEvents(buffer: string): { events: Array<{ type: string; data: unknown }>; remaining: string } {
+  const events: Array<{ type: string; data: unknown }> = [];
+  const lines = buffer.split("\n");
+  let remaining = "";
+  let currentEvent: { type?: string; data?: string } = {};
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // If this is the last line and doesn't end with newline, it's incomplete
+    if (i === lines.length - 1 && !buffer.endsWith("\n")) {
+      remaining = line;
+      break;
+    }
+
+    if (line.startsWith("event: ")) {
+      currentEvent.type = line.slice(7).trim();
+    } else if (line.startsWith("data: ")) {
+      currentEvent.data = line.slice(6);
+    } else if (line === "" && currentEvent.type && currentEvent.data) {
+      try {
+        events.push({
+          type: currentEvent.type,
+          data: JSON.parse(currentEvent.data),
+        });
+      } catch {
+        // Ignore parse errors
+      }
+      currentEvent = {};
+    }
+  }
+
+  return { events, remaining };
+}
+
+// Process workflow operations from assistant content
+async function processWorkflowOperations(
+  assistantContent: string
+): Promise<{ workflowId?: string; workflowName?: string }> {
+  let workflowId: string | undefined;
+  let workflowName: string | undefined;
+
+  // Check for workflow update first (more specific pattern)
+  const updateMatch = assistantContent.match(
+    /```n8n-workflow-update\s*([\s\S]*?)```/
+  );
+
+  // Check for new workflow creation
+  const createMatch = assistantContent.match(
+    /```n8n-workflow\s*([\s\S]*?)```/
+  );
+
+  if (updateMatch) {
+    try {
+      const workflowJson = JSON.parse(updateMatch[1].trim());
+      const updateId = workflowJson._updateId;
+      workflowName = workflowJson.name || "Untitled Workflow";
+
+      if (!updateId) {
+        console.error("Workflow update missing _updateId field");
+      } else {
+        delete workflowJson._updateId;
+        const result = await updateWorkflow(updateId, workflowJson);
+        if (result.success) {
+          workflowId = result.id;
+        } else {
+          console.error("n8n API error:", result.error);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to parse or update workflow:", e);
+    }
+  } else if (createMatch) {
+    try {
+      const workflowJson = JSON.parse(createMatch[1].trim());
+      workflowName = workflowJson.name || "Untitled Workflow";
+
+      const n8nApiUrl = process.env.N8N_API_URL;
+      const n8nApiKey = process.env.N8N_API_KEY;
+
+      if (!n8nApiUrl || !n8nApiKey) {
+        throw new Error("n8n API not configured");
+      }
+
+      const n8nResponse = await fetch(`${n8nApiUrl}/api/v1/workflows`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-N8N-API-KEY": n8nApiKey,
+        },
+        body: JSON.stringify(workflowJson),
+      });
+
+      if (n8nResponse.ok) {
+        const n8nData = await n8nResponse.json();
+        workflowId = n8nData.id;
+      } else {
+        const n8nError = await n8nResponse.text();
+        console.error("n8n API error:", n8nError);
+      }
+    } catch (e) {
+      console.error("Failed to parse or create workflow:", e);
+    }
+  }
+
+  // Check for action commands
+  const actionMatch = assistantContent.match(
+    /```n8n-action\s*([\s\S]*?)```/
+  );
+
+  if (actionMatch) {
+    try {
+      const actionJson = JSON.parse(actionMatch[1].trim()) as {
+        action?: string;
+        workflowId?: string;
+      };
+      const { action, workflowId: actionWorkflowId } = actionJson;
+
+      if (
+        action &&
+        actionWorkflowId &&
+        (action === "activate" || action === "deactivate" || action === "delete")
+      ) {
+        const actionResult = await executeN8nAction({ action, workflowId: actionWorkflowId });
+        if (actionResult.success) {
+          console.log(`Action ${action} succeeded:`, actionResult.message);
+        } else {
+          console.error(`Action ${action} failed:`, actionResult.message);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to parse or execute action:", e);
+    }
+  }
+
+  return { workflowId, workflowName };
+}
+
+// Type for message from listMessages query
+interface MessageDoc {
+  _id: Id<"messages">;
+  _creationTime: number;
+  conversationId: Id<"conversations">;
+  role: "user" | "assistant";
+  content: string;
+  workflowId?: string;
+  workflowName?: string;
+  isStreaming?: boolean;
+  streamingError?: string;
+}
+
+// Main action: send a message and get AI response with streaming
 export const sendMessage = action({
   args: {
     conversationId: v.id("conversations"),
     content: v.string(),
   },
-  handler: async (ctx, args) => {
+  returns: v.object({
+    workflowId: v.optional(v.string()),
+    workflowName: v.optional(v.string()),
+    messageId: v.id("messages"),
+  }),
+  handler: async (ctx, args): Promise<{ workflowId?: string; workflowName?: string; messageId: Id<"messages"> }> => {
     // 1. Save user message
     await ctx.runMutation(api.chat.saveMessage, {
       conversationId: args.conversationId,
@@ -435,15 +635,17 @@ export const sendMessage = action({
     });
 
     // 2. Get conversation history for context
-    const messages = await ctx.runQuery(api.chat.listMessages, {
+    const messages: MessageDoc[] = await ctx.runQuery(api.chat.listMessages, {
       conversationId: args.conversationId,
     });
 
-    // 3. Build Claude messages array
-    const claudeMessages = messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+    // 3. Build Claude messages array (exclude messages still streaming)
+    const claudeMessages = messages
+      .filter((msg: MessageDoc) => !msg.isStreaming)
+      .map((msg: MessageDoc) => ({
+        role: msg.role,
+        content: msg.content,
+      }));
 
     // 4. Fetch current workflows, executions, and credentials for context
     const [workflows, executions, credentials] = await Promise.all([
@@ -453,151 +655,139 @@ export const sendMessage = action({
     ]);
     const systemPrompt = buildSystemPrompt(workflows, executions, credentials);
 
-    // 5. Call Claude API
+    // 5. Create placeholder assistant message for streaming
+    const assistantMessageId: Id<"messages"> = await ctx.runMutation(api.chat.saveMessage, {
+      conversationId: args.conversationId,
+      role: "assistant",
+      content: "",
+      isStreaming: true,
+    });
+
+    // 6. Call Claude API with streaming
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     if (!anthropicApiKey) {
+      await ctx.runMutation(api.chat.updateStreamingMessage, {
+        messageId: assistantMessageId,
+        content: "",
+        isStreaming: false,
+        streamingError: "ANTHROPIC_API_KEY not configured",
+      });
       throw new Error("ANTHROPIC_API_KEY not configured");
     }
 
-    const claudeResponse = await fetch(
-      "https://api.anthropic.com/v1/messages",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": anthropicApiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4096,
-          system: systemPrompt,
-          messages: claudeMessages,
-        }),
-      }
-    );
-
-    if (!claudeResponse.ok) {
-      const error = await claudeResponse.text();
-      throw new Error(`Claude API error: ${error}`);
-    }
-
-    const claudeData = await claudeResponse.json();
-    const assistantContent =
-      claudeData.content[0]?.text || "Sorry, I could not generate a response.";
-
-    // 6. Check for workflow JSON in response (create or update)
+    let fullContent = "";
     let workflowId: string | undefined;
     let workflowName: string | undefined;
 
-    // Check for workflow update first (more specific pattern)
-    const updateMatch = assistantContent.match(
-      /```n8n-workflow-update\s*([\s\S]*?)```/
-    );
-
-    // Check for new workflow creation
-    const createMatch = assistantContent.match(
-      /```n8n-workflow\s*([\s\S]*?)```/
-    );
-
-    if (updateMatch) {
-      // Handle workflow update
-      try {
-        const workflowJson = JSON.parse(updateMatch[1].trim());
-        const updateId = workflowJson._updateId;
-        workflowName = workflowJson.name || "Untitled Workflow";
-
-        if (!updateId) {
-          console.error("Workflow update missing _updateId field");
-        } else {
-          // Remove the _updateId field before sending to n8n
-          delete workflowJson._updateId;
-
-          const result = await updateWorkflow(updateId, workflowJson);
-          if (result.success) {
-            workflowId = result.id;
-          } else {
-            console.error("n8n API error:", result.error);
-          }
-        }
-      } catch (e) {
-        console.error("Failed to parse or update workflow:", e);
-      }
-    } else if (createMatch) {
-      // Handle new workflow creation
-      try {
-        const workflowJson = JSON.parse(createMatch[1].trim());
-        workflowName = workflowJson.name || "Untitled Workflow";
-
-        // 7. Create workflow in n8n
-        const n8nApiUrl = process.env.N8N_API_URL;
-        const n8nApiKey = process.env.N8N_API_KEY;
-
-        if (!n8nApiUrl || !n8nApiKey) {
-          throw new Error("n8n API not configured");
-        }
-
-        const n8nResponse = await fetch(`${n8nApiUrl}/api/v1/workflows`, {
+    try {
+      const claudeResponse = await fetch(
+        "https://api.anthropic.com/v1/messages",
+        {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-N8N-API-KEY": n8nApiKey,
+            "x-api-key": anthropicApiKey,
+            "anthropic-version": "2023-06-01",
           },
-          body: JSON.stringify(workflowJson),
-        });
-
-        if (n8nResponse.ok) {
-          const n8nData = await n8nResponse.json();
-          workflowId = n8nData.id;
-        } else {
-          const n8nError = await n8nResponse.text();
-          console.error("n8n API error:", n8nError);
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 4096,
+            stream: true,
+            system: systemPrompt,
+            messages: claudeMessages,
+          }),
         }
-      } catch (e) {
-        console.error("Failed to parse or create workflow:", e);
+      );
+
+      if (!claudeResponse.ok) {
+        const error = await claudeResponse.text();
+        await ctx.runMutation(api.chat.updateStreamingMessage, {
+          messageId: assistantMessageId,
+          content: "",
+          isStreaming: false,
+          streamingError: `Claude API error: ${error}`,
+        });
+        throw new Error(`Claude API error: ${error}`);
       }
-    }
 
-    // 7. Check for action commands (activate/deactivate/delete)
-    const actionMatch = assistantContent.match(
-      /```n8n-action\s*([\s\S]*?)```/
-    );
+      // 7. Process streaming response
+      const reader = claudeResponse.body?.getReader();
+      if (!reader) {
+        throw new Error("No response body");
+      }
 
-    if (actionMatch) {
-      try {
-        const actionJson = JSON.parse(actionMatch[1].trim()) as {
-          action?: string;
-          workflowId?: string;
-        };
-        const { action, workflowId } = actionJson;
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let lastUpdate = Date.now();
+      const UPDATE_INTERVAL = 100; // Update DB every 100ms
 
-        if (
-          action &&
-          workflowId &&
-          (action === "activate" || action === "deactivate" || action === "delete")
-        ) {
-          const actionResult = await executeN8nAction({ action, workflowId });
+      while (true) {
+        // Check if streaming was stopped by user
+        const currentMessages: MessageDoc[] = await ctx.runQuery(api.chat.listMessages, {
+          conversationId: args.conversationId,
+        });
+        const assistantMessage = currentMessages.find(
+          (m: MessageDoc) => m._id === assistantMessageId
+        );
+        if (assistantMessage && !assistantMessage.isStreaming) {
+          // User stopped streaming
+          await reader.cancel();
+          break;
+        }
 
-          if (actionResult.success) {
-            console.log(`Action ${action} succeeded:`, actionResult.message);
-          } else {
-            console.error(`Action ${action} failed:`, actionResult.message);
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events
+        const { events, remaining } = parseSSEEvents(buffer);
+        buffer = remaining;
+
+        for (const event of events) {
+          if (event.type === "content_block_delta") {
+            const delta = event.data as { delta?: { text?: string } };
+            if (delta?.delta?.text) {
+              fullContent += delta.delta.text;
+            }
           }
         }
-      } catch (e) {
-        console.error("Failed to parse or execute action:", e);
+
+        // Batch updates every 100ms
+        if (Date.now() - lastUpdate > UPDATE_INTERVAL && fullContent) {
+          await ctx.runMutation(api.chat.updateStreamingMessage, {
+            messageId: assistantMessageId,
+            content: fullContent,
+          });
+          lastUpdate = Date.now();
+        }
       }
+
+      // 8. Process workflow operations after streaming completes
+      const workflowResult = await processWorkflowOperations(fullContent);
+      workflowId = workflowResult.workflowId;
+      workflowName = workflowResult.workflowName;
+
+      // 9. Final update - mark streaming complete
+      await ctx.runMutation(api.chat.updateStreamingMessage, {
+        messageId: assistantMessageId,
+        content: fullContent || "Sorry, I could not generate a response.",
+        isStreaming: false,
+        workflowId,
+        workflowName,
+      });
+    } catch (e) {
+      // Handle errors during streaming
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      await ctx.runMutation(api.chat.updateStreamingMessage, {
+        messageId: assistantMessageId,
+        content: fullContent || "",
+        isStreaming: false,
+        streamingError: errorMessage,
+      });
+      throw e;
     }
 
-    // 8. Save assistant response
-    await ctx.runMutation(api.chat.saveMessage, {
-      conversationId: args.conversationId,
-      role: "assistant",
-      content: assistantContent,
-      workflowId,
-      workflowName,
-    });
-
-    return { workflowId, workflowName };
+    return { workflowId, workflowName, messageId: assistantMessageId };
   },
 });
