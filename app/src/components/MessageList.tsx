@@ -6,10 +6,22 @@ type Message = Doc<"messages">;
 export function MessageList({ messages }: { messages: Message[] }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
+
+  // Track if user is near the bottom (within 30px)
+  const handleScroll = () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom < 30;
+  };
 
   useEffect(() => {
-    // Auto-scroll to bottom when messages change
-    // Use requestAnimationFrame to ensure smooth scrolling
+    // Only auto-scroll if user is near the bottom
+    if (!shouldAutoScrollRef.current) return;
+
     requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     });
@@ -24,7 +36,7 @@ export function MessageList({ messages }: { messages: Message[] }) {
   }
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div ref={containerRef} className="flex-1 overflow-y-auto p-4 space-y-4" onScroll={handleScroll}>
       {messages.map((message) => (
         <MessageWithToolCalls key={message._id} message={message} />
       ))}
