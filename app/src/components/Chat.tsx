@@ -55,7 +55,6 @@ export function Chat() {
 
   const handleClearChat = () => {
     if (!conversationId) return;
-    if (!confirm("Clear all messages? This cannot be undone.")) return;
 
     clearConversation({ conversationId })
       .then(() => {
