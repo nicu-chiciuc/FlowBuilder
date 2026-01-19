@@ -82,6 +82,8 @@ This specification is a living document that will evolve as the project develops
 | [README.md](./README.md) | Current | Main specification overview |
 | [chat-interface.md](./chat-interface.md) | In Progress | Chat UI and interaction patterns |
 | [n8n-integration.md](./n8n-integration.md) | Verified | n8n API integration details |
+| [streaming.md](./streaming.md) | Implemented | Real-time streaming of AI responses |
+| [tool-based-inspection.md](./tool-based-inspection.md) | Draft | On-demand workflow inspection via tools |
 | [ai-engine.md](./ai-engine.md) | Planned | LLM processing and prompt design |
 | [api-spec.md](./api-spec.md) | Planned | Backend API specification |
 | [data-model.md](./data-model.md) | Planned | Database schema and data structures |

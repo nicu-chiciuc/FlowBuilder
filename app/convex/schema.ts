@@ -18,5 +18,16 @@ export default defineSchema({
     workflowName: v.optional(v.string()),
     isStreaming: v.optional(v.boolean()),
     streamingError: v.optional(v.string()),
+    // Tool calls made by Claude during this response
+    toolCalls: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          input: v.optional(v.string()), // JSON string of input
+          output: v.optional(v.string()), // JSON string of output
+          status: v.union(v.literal("pending"), v.literal("success"), v.literal("error")),
+        })
+      )
+    ),
   }).index("by_conversation", ["conversationId"]),
 });

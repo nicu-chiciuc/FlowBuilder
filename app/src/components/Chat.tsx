@@ -7,7 +7,7 @@ import { MessageInput } from "./MessageInput";
 
 export function Chat() {
   const [conversationId, setConversationId] = useState<Id<"conversations"> | null>(null);
-  const [streamingMessageId, setStreamingMessageId] = useState<Id<"messages"> | null>(null);
+  const [_streamingMessageId, setStreamingMessageId] = useState<Id<"messages"> | null>(null);
 
   const getOrCreateConversation = useMutation(api.chat.getOrCreateConversation);
   const sendMessage = useAction(api.chat.sendMessage);

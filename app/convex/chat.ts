@@ -3,28 +3,81 @@ import { query, mutation, action } from "./_generated/server";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
+// Tool definitions for Claude to inspect workflows on-demand
+// Based on Anthropic's "think" tool research for improved sequential decision-making
+const FLOWBUILDER_TOOLS = [
+  {
+    name: "think",
+    description:
+      "Use this tool to think through complex decisions. Use it to analyze workflow structure after fetching it, plan modifications, or reason about execution logs. This helps you make better decisions before taking action. The thought will not be shown to the user.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        thought: {
+          type: "string",
+          description: "Your reasoning or analysis",
+        },
+      },
+      required: ["thought"],
+    },
+  },
+  {
+    name: "get_workflow",
+    description:
+      "Get the full JSON definition of a workflow by its ID. Use this when you need to inspect, modify, or understand the details of a specific workflow. Returns the complete workflow including all nodes, connections, and settings. Always call this before modifying a workflow.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        workflow_id: {
+          type: "string",
+          description: "The ID of the workflow to fetch",
+        },
+      },
+      required: ["workflow_id"],
+    },
+  },
+  {
+    name: "list_workflows",
+    description:
+      "Get an updated list of all workflows with their current status. Use this to refresh your knowledge of what workflows exist, especially after creating or deleting workflows.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "get_execution_details",
+    description:
+      "Get detailed information about a specific workflow execution, including the data that flowed through each node. Use this for debugging failed executions or understanding what happened during a run.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        execution_id: {
+          type: "string",
+          description: "The ID of the execution to inspect",
+        },
+      },
+      required: ["execution_id"],
+    },
+  },
+];
+
+// Build system prompt with workflow SUMMARIES only (not full JSON)
+// Claude uses tools to fetch full details on-demand
 function buildSystemPrompt(
-  workflows: N8nWorkflow[],
+  workflowSummaries: Array<{ id: string; name: string; active: boolean }>,
   executions: N8nExecution[],
   credentials: N8nCredential[]
 ) {
   let workflowSection: string;
 
-  if (workflows.length === 0) {
+  if (workflowSummaries.length === 0) {
     workflowSection = "No workflows exist yet.";
   } else {
-    workflowSection = workflows.map(w => {
-      const workflowJson = {
-        name: w.name,
-        nodes: w.nodes,
-        connections: w.connections,
-        settings: w.settings,
-      };
-      return `### "${w.name}" (ID: ${w.id}, ${w.active ? "active" : "inactive"})
-\`\`\`json
-${JSON.stringify(workflowJson, null, 2)}
-\`\`\``;
-    }).join("\n\n");
+    workflowSection = workflowSummaries
+      .map((w) => `- **${w.name}** (ID: ${w.id}) - ${w.active ? "active" : "inactive"}`)
+      .join("\n");
   }
 
   let executionSection: string;
@@ -32,44 +85,60 @@ ${JSON.stringify(workflowJson, null, 2)}
   if (executions.length === 0) {
     executionSection = "No recent executions.";
   } else {
-    executionSection = executions.map(e => {
-      const workflowName = workflows.find(w => w.id === e.workflowId)?.name || "Unknown";
-      let summary = `- **${workflowName}** (ID: ${e.id}): ${e.status.toUpperCase()} at ${e.startedAt}`;
+    executionSection = executions
+      .slice(0, 10) // Limit to 10 most recent
+      .map((e) => {
+        const workflowName =
+          workflowSummaries.find((w) => w.id === e.workflowId)?.name || "Unknown";
+        let summary = `- **${workflowName}** (exec ID: ${e.id}): ${e.status.toUpperCase()} at ${e.startedAt}`;
 
-      if (e.status === "error" && e.data?.resultData?.error) {
-        summary += `\n  Error: ${e.data.resultData.error.message}`;
-      }
+        if (e.status === "error" && e.data?.resultData?.error) {
+          summary += `\n  Error: ${e.data.resultData.error.message}`;
+        }
 
-      return summary;
-    }).join("\n");
+        return summary;
+      })
+      .join("\n");
   }
 
   let credentialSection: string;
 
   if (credentials.length === 0) {
-    credentialSection = "No credentials configured. The user will need to set up credentials in n8n before using integrations that require authentication.";
+    credentialSection =
+      "No credentials configured. The user will need to set up credentials in n8n before using integrations that require authentication.";
   } else {
-    credentialSection = credentials.map(c => `- **${c.name}** (type: ${c.type})`).join("\n");
+    credentialSection = credentials.map((c) => `- **${c.name}** (type: ${c.type})`).join("\n");
   }
 
   return `You are FlowBuilder, an AI assistant that helps users create and manage n8n workflows through natural language.
 
-## Current Workflows
+## Available Workflows
 ${workflowSection}
+
+## Tools Available
+You have tools to inspect workflows and executions on-demand:
+- \`get_workflow(workflow_id)\` - Fetch full workflow JSON before inspecting or modifying
+- \`list_workflows()\` - Refresh the workflow list after creating or deleting
+- \`get_execution_details(execution_id)\` - Get detailed execution info for debugging
+- \`think(thought)\` - Reason about complex decisions (use after fetching data)
+
+**Best Practice**: Always call \`get_workflow\` before modifying a workflow, then use \`think\` to reason about the structure before generating updates.
 
 ## Recent Executions (Logs)
 ${executionSection}
+
+Use \`get_execution_details\` with the exec ID to get detailed node-by-node results for debugging.
 
 ## Available Credentials
 ${credentialSection}
 
 ## Capabilities
-1. **List workflows**: When the user asks about their workflows, describe what exists based on the list above.
+1. **List workflows**: Describe what exists based on the workflow list above.
 2. **Create workflows**: Generate valid n8n workflow JSON when the user describes what they want.
-3. **Modify workflows**: Update existing workflows when the user asks for changes.
+3. **Modify workflows**: Use \`get_workflow\` first to see current state, then generate updates.
 4. **Activate/Deactivate workflows**: Turn workflows on or off.
 5. **Delete workflows**: Remove workflows when requested.
-6. **Debug workflows**: Analyze recent execution logs to help users understand failures and fix issues.
+6. **Debug workflows**: Use \`get_execution_details\` to analyze failures.
 7. **Answer questions**: Help users understand workflows and automation concepts.
 
 ## Creating Workflows
@@ -93,14 +162,17 @@ This workflow will [explanation]."
 
 ## Modifying Workflows
 When MODIFYING an existing workflow:
-1. The user must reference an existing workflow (by name or ID from the list above)
-2. Generate the COMPLETE updated workflow JSON (not just the changes)
-3. Wrap the JSON in a code block with language "n8n-workflow-update"
-4. Include the workflow ID in the JSON as "_updateId" field
-5. Explain what was changed
+1. FIRST call \`get_workflow\` to fetch the current workflow definition
+2. Use \`think\` to analyze the structure and plan your changes
+3. Generate the COMPLETE updated workflow JSON (not just the changes)
+4. Wrap the JSON in a code block with language "n8n-workflow-update"
+5. Include the workflow ID in the JSON as "_updateId" field
+6. Explain what was changed
 
-Example:
-"I'll update the 'Daily Report' workflow to add email notification.
+Example flow:
+1. Call get_workflow("abc123")
+2. Call think("The workflow has nodes X, Y, Z connected like this... I need to add node W after Y...")
+3. Generate the update:
 
 \`\`\`n8n-workflow-update
 {
@@ -110,8 +182,6 @@ Example:
   "connections": {...}
 }
 \`\`\`
-
-I've added an email node that will [explanation of changes]."
 
 IMPORTANT: When modifying, you must provide the COMPLETE workflow definition, not just the parts that changed. The entire workflow will be replaced with what you provide.
 
@@ -362,6 +432,102 @@ async function executeN8nAction(
   }
 }
 
+// Tool execution functions for Claude tool use
+// These are called when Claude requests to use a tool during conversation
+
+type ToolResult = { content: string; isError?: boolean };
+
+async function executeThink(thought: string): Promise<ToolResult> {
+  // The think tool just logs the thought - no side effects
+  // This gives Claude a "scratchpad" to reason through complex decisions
+  console.log("[Think tool]:", thought.substring(0, 100) + (thought.length > 100 ? "..." : ""));
+  return { content: JSON.stringify({ status: "ok" }) };
+}
+
+async function executeGetWorkflow(workflowId: string): Promise<ToolResult> {
+  const result = await n8nApiCall("GET", `/workflows/${workflowId}`);
+  if (!result.success) {
+    return {
+      content: JSON.stringify({ error: result.error || "Failed to fetch workflow" }),
+      isError: true,
+    };
+  }
+  // Return full workflow JSON
+  return { content: JSON.stringify(result.data) };
+}
+
+async function executeListWorkflows(): Promise<ToolResult> {
+  const workflows = await fetchN8nWorkflows();
+  const summaries = workflows.map((w) => ({
+    id: w.id,
+    name: w.name,
+    active: w.active,
+  }));
+  return {
+    content: JSON.stringify({ workflows: summaries, count: summaries.length }),
+  };
+}
+
+async function executeGetExecutionDetails(executionId: string): Promise<ToolResult> {
+  const result = await n8nApiCall("GET", `/executions/${executionId}`);
+  if (!result.success) {
+    return {
+      content: JSON.stringify({ error: result.error || "Failed to fetch execution" }),
+      isError: true,
+    };
+  }
+
+  const exec = result.data as N8nExecution;
+
+  // Build a summary of node results
+  const nodeResults: Record<string, { status: string; error?: string; outputItems?: number }> = {};
+  if (exec.data?.resultData?.runData) {
+    for (const [nodeName, runs] of Object.entries(exec.data.resultData.runData)) {
+      const lastRun = runs[runs.length - 1];
+      if (lastRun?.error) {
+        nodeResults[nodeName] = { status: "error", error: lastRun.error.message };
+      } else if (lastRun?.data?.main) {
+        const itemCount = lastRun.data.main.reduce((sum, arr) => sum + (arr?.length || 0), 0);
+        nodeResults[nodeName] = { status: "success", outputItems: itemCount };
+      }
+    }
+  }
+
+  const summary = {
+    id: exec.id,
+    workflowId: exec.workflowId,
+    status: exec.status,
+    startedAt: exec.startedAt,
+    stoppedAt: exec.stoppedAt,
+    error: exec.data?.resultData?.error,
+    nodeResults,
+  };
+
+  return { content: JSON.stringify(summary) };
+}
+
+// Main tool executor - routes to appropriate function
+async function executeTool(
+  name: string,
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  switch (name) {
+    case "think":
+      return executeThink(input.thought as string);
+    case "get_workflow":
+      return executeGetWorkflow(input.workflow_id as string);
+    case "list_workflows":
+      return executeListWorkflows();
+    case "get_execution_details":
+      return executeGetExecutionDetails(input.execution_id as string);
+    default:
+      return {
+        content: JSON.stringify({ error: `Unknown tool: ${name}` }),
+        isError: true,
+      };
+  }
+}
+
 // Get or create the default conversation
 export const getOrCreateConversation = mutation({
   args: {},
@@ -431,21 +597,33 @@ export const updateStreamingMessage = mutation({
     streamingError: v.optional(v.string()),
     workflowId: v.optional(v.string()),
     workflowName: v.optional(v.string()),
+    toolCalls: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          input: v.optional(v.string()),
+          output: v.optional(v.string()),
+          status: v.union(v.literal("pending"), v.literal("success"), v.literal("error")),
+        })
+      )
+    ),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const { messageId, content, isStreaming, streamingError, workflowId, workflowName } = args;
+    const { messageId, content, isStreaming, streamingError, workflowId, workflowName, toolCalls } = args;
     const updates: {
       content: string;
       isStreaming?: boolean;
       streamingError?: string;
       workflowId?: string;
       workflowName?: string;
+      toolCalls?: Array<{ name: string; input?: string; output?: string; status: "pending" | "success" | "error" }>;
     } = { content };
     if (isStreaming !== undefined) updates.isStreaming = isStreaming;
     if (streamingError !== undefined) updates.streamingError = streamingError;
     if (workflowId !== undefined) updates.workflowId = workflowId;
     if (workflowName !== undefined) updates.workflowName = workflowName;
+    if (toolCalls !== undefined) updates.toolCalls = toolCalls;
     await ctx.db.patch("messages", messageId, updates);
     return null;
   },
@@ -613,7 +791,21 @@ interface MessageDoc {
   workflowName?: string;
   isStreaming?: boolean;
   streamingError?: string;
+  toolCalls?: Array<{
+    name: string;
+    input?: string;
+    output?: string;
+    status: "pending" | "success" | "error";
+  }>;
 }
+
+// Type for tracking tool calls during streaming
+type TrackedToolCall = {
+  name: string;
+  input: string;
+  output?: string;
+  status: "pending" | "success" | "error";
+};
 
 // Main action: send a message and get AI response with streaming
 export const sendMessage = action({
@@ -647,13 +839,19 @@ export const sendMessage = action({
         content: msg.content,
       }));
 
-    // 4. Fetch current workflows, executions, and credentials for context
+    // 4. Fetch current workflows (summaries only), executions, and credentials for context
     const [workflows, executions, credentials] = await Promise.all([
       fetchN8nWorkflows(),
       fetchN8nExecutions(),
       fetchN8nCredentials(),
     ]);
-    const systemPrompt = buildSystemPrompt(workflows, executions, credentials);
+    // Convert to summaries for the system prompt (full details fetched via tools)
+    const workflowSummaries = workflows.map((w) => ({
+      id: w.id,
+      name: w.name,
+      active: w.active,
+    }));
+    const systemPrompt = buildSystemPrompt(workflowSummaries, executions, credentials);
 
     // 5. Create placeholder assistant message for streaming
     const assistantMessageId: Id<"messages"> = await ctx.runMutation(api.chat.saveMessage, {
@@ -675,113 +873,277 @@ export const sendMessage = action({
       throw new Error("ANTHROPIC_API_KEY not configured");
     }
 
-    let fullContent = "";
+    let fullTextContent = "";
     let workflowId: string | undefined;
     let workflowName: string | undefined;
 
+    // Track all tool calls across iterations for UI display
+    const allToolCalls: TrackedToolCall[] = [];
+
+    // Messages for the tool use loop - starts with conversation history
+    type ClaudeMessage = {
+      role: "user" | "assistant";
+      content: string | Array<{
+        type: "text" | "tool_use" | "tool_result";
+        text?: string;
+        id?: string;
+        name?: string;
+        input?: Record<string, unknown>;
+        tool_use_id?: string;
+        content?: string;
+        is_error?: boolean;
+      }>;
+    };
+    const currentMessages: ClaudeMessage[] = [...claudeMessages];
+
     try {
-      const claudeResponse = await fetch(
-        "https://api.anthropic.com/v1/messages",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": anthropicApiKey,
-            "anthropic-version": "2023-06-01",
-          },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 4096,
-            stream: true,
-            system: systemPrompt,
-            messages: claudeMessages,
-          }),
-        }
-      );
+      const MAX_TOOL_ITERATIONS = 10; // Prevent infinite loops
+      let iteration = 0;
 
-      if (!claudeResponse.ok) {
-        const error = await claudeResponse.text();
-        await ctx.runMutation(api.chat.updateStreamingMessage, {
-          messageId: assistantMessageId,
-          content: "",
-          isStreaming: false,
-          streamingError: `Claude API error: ${error}`,
-        });
-        throw new Error(`Claude API error: ${error}`);
-      }
+      // Tool use loop - continue until Claude stops calling tools
+      while (iteration < MAX_TOOL_ITERATIONS) {
+        iteration++;
 
-      // 7. Process streaming response
-      const reader = claudeResponse.body?.getReader();
-      if (!reader) {
-        throw new Error("No response body");
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let lastUpdate = Date.now();
-      const UPDATE_INTERVAL = 100; // Update DB every 100ms
-
-      while (true) {
-        // Check if streaming was stopped by user
-        const currentMessages: MessageDoc[] = await ctx.runQuery(api.chat.listMessages, {
-          conversationId: args.conversationId,
-        });
-        const assistantMessage = currentMessages.find(
-          (m: MessageDoc) => m._id === assistantMessageId
+        // Make streaming request to Claude
+        const claudeResponse = await fetch(
+          "https://api.anthropic.com/v1/messages",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": anthropicApiKey,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 4096,
+              stream: true,
+              system: systemPrompt,
+              messages: currentMessages,
+              tools: FLOWBUILDER_TOOLS,
+            }),
+          }
         );
-        if (assistantMessage && !assistantMessage.isStreaming) {
-          // User stopped streaming
-          await reader.cancel();
-          break;
+
+        if (!claudeResponse.ok) {
+          const error = await claudeResponse.text();
+          await ctx.runMutation(api.chat.updateStreamingMessage, {
+            messageId: assistantMessageId,
+            content: "",
+            isStreaming: false,
+            streamingError: `Claude API error: ${error}`,
+          });
+          throw new Error(`Claude API error: ${error}`);
         }
 
-        const { done, value } = await reader.read();
-        if (done) break;
+        // Process streaming response
+        const reader = claudeResponse.body?.getReader();
+        if (!reader) {
+          throw new Error("No response body");
+        }
 
-        buffer += decoder.decode(value, { stream: true });
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let lastUpdate = Date.now();
+        const UPDATE_INTERVAL = 100;
 
-        // Parse SSE events
-        const { events, remaining } = parseSSEEvents(buffer);
-        buffer = remaining;
+        // Track content blocks in this response
+        let currentTextContent = "";
+        const toolCalls: Array<{ id: string; name: string; input: string }> = [];
+        let stopReason = "";
 
-        for (const event of events) {
-          if (event.type === "content_block_delta") {
-            const delta = event.data as { delta?: { text?: string } };
-            if (delta?.delta?.text) {
-              fullContent += delta.delta.text;
+        while (true) {
+          // Check if streaming was stopped by user
+          const dbMessages: MessageDoc[] = await ctx.runQuery(api.chat.listMessages, {
+            conversationId: args.conversationId,
+          });
+          const assistantMessage = dbMessages.find(
+            (m: MessageDoc) => m._id === assistantMessageId
+          );
+          if (assistantMessage && !assistantMessage.isStreaming) {
+            await reader.cancel();
+            return { workflowId, workflowName, messageId: assistantMessageId };
+          }
+
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE events
+          const { events, remaining } = parseSSEEvents(buffer);
+          buffer = remaining;
+
+          for (const event of events) {
+            if (event.type === "content_block_start") {
+              const data = event.data as {
+                index: number;
+                content_block: { type: string; id?: string; name?: string };
+              };
+              if (data.content_block.type === "tool_use") {
+                toolCalls.push({
+                  id: data.content_block.id || "",
+                  name: data.content_block.name || "",
+                  input: "",
+                });
+              }
+            } else if (event.type === "content_block_delta") {
+              const data = event.data as {
+                index: number;
+                delta: { type: string; text?: string; partial_json?: string };
+              };
+              if (data.delta.type === "text_delta" && data.delta.text) {
+                currentTextContent += data.delta.text;
+                fullTextContent += data.delta.text;
+              } else if (data.delta.type === "input_json_delta" && data.delta.partial_json) {
+                // Accumulate tool input JSON
+                const toolIndex = toolCalls.length - 1;
+                if (toolIndex >= 0) {
+                  toolCalls[toolIndex].input += data.delta.partial_json;
+                }
+              }
+            } else if (event.type === "message_delta") {
+              const data = event.data as { delta?: { stop_reason?: string } };
+              if (data.delta?.stop_reason) {
+                stopReason = data.delta.stop_reason;
+              }
             }
+          }
+
+          // Update UI with streamed text
+          if (Date.now() - lastUpdate > UPDATE_INTERVAL && fullTextContent) {
+            await ctx.runMutation(api.chat.updateStreamingMessage, {
+              messageId: assistantMessageId,
+              content: fullTextContent,
+            });
+            lastUpdate = Date.now();
           }
         }
 
-        // Batch updates every 100ms
-        if (Date.now() - lastUpdate > UPDATE_INTERVAL && fullContent) {
+        // Stream finished - check if we need to execute tools
+        if (stopReason === "tool_use" && toolCalls.length > 0) {
+          // Build assistant message with tool calls
+          const assistantContent: Array<{
+            type: "text" | "tool_use";
+            text?: string;
+            id?: string;
+            name?: string;
+            input?: Record<string, unknown>;
+          }> = [];
+
+          if (currentTextContent) {
+            assistantContent.push({ type: "text", text: currentTextContent });
+          }
+
+          // Add pending tool calls to tracking and update UI
+          for (const tool of toolCalls) {
+            let parsedInput: Record<string, unknown> = {};
+            try {
+              parsedInput = JSON.parse(tool.input || "{}");
+            } catch {
+              parsedInput = {};
+            }
+            assistantContent.push({
+              type: "tool_use",
+              id: tool.id,
+              name: tool.name,
+              input: parsedInput,
+            });
+
+            // Track this tool call as pending
+            allToolCalls.push({
+              name: tool.name,
+              input: tool.input,
+              status: "pending",
+            });
+          }
+
+          // Update UI with pending tool calls
           await ctx.runMutation(api.chat.updateStreamingMessage, {
             messageId: assistantMessageId,
-            content: fullContent,
+            content: fullTextContent,
+            toolCalls: allToolCalls,
           });
-          lastUpdate = Date.now();
+
+          // Execute all tools and collect results
+          const toolResults: Array<{
+            type: "tool_result";
+            tool_use_id: string;
+            content: string;
+            is_error?: boolean;
+          }> = [];
+
+          for (let i = 0; i < toolCalls.length; i++) {
+            const tool = toolCalls[i];
+            let parsedInput: Record<string, unknown> = {};
+            try {
+              parsedInput = JSON.parse(tool.input || "{}");
+            } catch {
+              parsedInput = {};
+            }
+
+            const result = await executeTool(tool.name, parsedInput);
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: tool.id,
+              content: result.content,
+              is_error: result.isError,
+            });
+
+            // Update the status and output of this tool call in allToolCalls
+            // Find the corresponding pending tool (it's at the end of allToolCalls)
+            const trackingIndex = allToolCalls.length - toolCalls.length + i;
+            if (trackingIndex >= 0 && trackingIndex < allToolCalls.length) {
+              allToolCalls[trackingIndex].status = result.isError ? "error" : "success";
+              allToolCalls[trackingIndex].output = result.content;
+            }
+
+            // Update UI with tool call status
+            await ctx.runMutation(api.chat.updateStreamingMessage, {
+              messageId: assistantMessageId,
+              content: fullTextContent,
+              toolCalls: allToolCalls,
+            });
+          }
+
+          // Add assistant message and tool results to conversation
+          currentMessages.push({
+            role: "assistant",
+            content: assistantContent,
+          });
+          currentMessages.push({
+            role: "user",
+            content: toolResults,
+          });
+
+          // Continue the loop to get Claude's next response
+          continue;
         }
+
+        // No more tool calls - we're done
+        break;
       }
 
-      // 8. Process workflow operations after streaming completes
-      const workflowResult = await processWorkflowOperations(fullContent);
+      // 8. Process workflow operations after all tool calls complete
+      const workflowResult = await processWorkflowOperations(fullTextContent);
       workflowId = workflowResult.workflowId;
       workflowName = workflowResult.workflowName;
 
       // 9. Final update - mark streaming complete
       await ctx.runMutation(api.chat.updateStreamingMessage, {
         messageId: assistantMessageId,
-        content: fullContent || "Sorry, I could not generate a response.",
+        content: fullTextContent || "Sorry, I could not generate a response.",
         isStreaming: false,
         workflowId,
         workflowName,
+        toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
       });
     } catch (e) {
       // Handle errors during streaming
       const errorMessage = e instanceof Error ? e.message : String(e);
       await ctx.runMutation(api.chat.updateStreamingMessage, {
         messageId: assistantMessageId,
-        content: fullContent || "",
+        content: fullTextContent || "",
         isStreaming: false,
         streamingError: errorMessage,
       });
